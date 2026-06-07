@@ -1,0 +1,180 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import os
+import glob
+
+# 1. Configurare paginã web (Stil modern, layout larg)
+st.set_page_config(page_title="N-Body Streamlit App", layout="wide")
+
+st.title("?? Panel de Vizualizare N-Body (Proiect Master SIC)")
+st.caption("Aplica?ie de inginerie software pentru analiza simulãrii gravita?ionale paralelizate")
+
+# 2. Deficire cãi cãtre directoarele locale de date
+BASE_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+
+# Func?ie pentru citirea fi?ierelor de tip XYZ (Pozi?ii particule)
+def citeste_xyz(cale_fisier):
+    particule = []
+    if not os.path.exists(cale_fisier):
+        return pd.DataFrame()
+        
+    with open(cale_fisier, 'r') as f:
+        linii = f.readlines()
+        
+    # În formatul XYZ, primele 2 linii sunt header-ul (numãr particule ?i comentariu)
+    for linie in linii[2:]:
+        componente = linie.strip().split()
+        if len(componente) >= 4:
+            particule.append({
+                "ID_Corp": int(componente[0]) if componente[0].isdigit() else componente[0],
+                "X": float(componente[1]),
+                "Y": float(componente[2]),
+                "Z": float(componente[3])
+            })
+    return pd.DataFrame(particule)
+
+# Func?ie pentru citirea fi?ierului de energie (ex: mpi_1k.txt sau energy_seq.txt)
+def citeste_energie(cale_energie):
+    date_energie = []
+    if not os.path.exists(cale_energie):
+        return pd.DataFrame()
+        
+    with open(cale_energie, 'r') as f:
+        for linie in f:
+            # Cautã liniile care con?in structura text exportatã din C: "Pas X Energie = Y" sau similar
+            linie_curata = linie.strip().lower()
+            if "pas" in linie_curata and "energie" in linie_curata:
+                # Curã?are grosierã a textului pentru a extrage valorile numerice
+                parti = linie_curata.replace("=", " ").replace(":", " ").split()
+                try:
+                    # Identificãm indexul cuvintelor cheie pentru siguran?ã
+                    idx_pas = parti.index("pas")
+                    idx_en = parti.index("energie")
+                    pas = int(parti[idx_pas + 1])
+                    energie = float(parti[idx_en + 1])
+                    date_energie.append({"Pas_Timp": pas, "Energie_Totala": energie})
+                except (ValueError, IndexError):
+                    continue
+    return pd.DataFrame(date_energie)
+
+# 3. Scanare automatã folder 'data/' local pentru fi?ierele XYZ
+fisiere_xyz = sorted(glob.glob(os.path.join(DATA_DIR, 'snap_*.xyz')))
+
+# 4. Construirea interfe?ei grafice (Sidebar ?i Tab-uri)
+st.sidebar.header("?? Configurare & Upload")
+
+if not fisiere_xyz:
+    st.sidebar.error("? Nu s-au gãsit fi?iere snap_*.xyz în folderul local 'data/'.")
+    st.info("?? **Pa?i de urmat**: Folose?te WinSCP ?i descarcã folderul `data` din PuTTY în folderul tãu local `nbody_streamlit/data/`, apoi reîmprospãteazã aceastã paginã (F5).")
+else:
+    # Extrage pa?ii disponibili direct din numele fi?ierelor descãrcate
+    pasi_disponibili = []
+    for f in fisiere_xyz:
+        nume_baza = os.path.basename(f)
+        try:
+            pas = int(nume_baza.split('_')[1].split('.')[0])
+            pasi_disponibili.append(pas)
+        except (IndexError, ValueError):
+            continue
+            
+    pasi_disponibili = sorted(list(set(pasi_disponibili)))
+
+    # Afi?are metrici rapide în bara lateralã
+    st.sidebar.metric(label="Total Snapshot-uri", value=len(pasi_disponibili))
+    st.sidebar.metric(label="Interval Pa?i (Pas de scriere)", value=100)
+    
+    # Slider principal pentru selectarea timpului (Sare din 100 în 100 conform datelor tale)
+    pas_selectat = st.sidebar.slider(
+        "Selecteazã Pasul Simulat:", 
+        min_value=int(min(pasi_disponibili)), 
+        max_value=int(max(pasi_disponibili)), 
+        value=int(min(pasi_disponibili)),
+        step=100
+    )
+
+    # Crearea tab-urilor în pagina principalã
+    tab1, tab2, tab3 = st.tabs(["?? Vizualizare Spa?ialã 3D", "?? Conservare Energie", "?? Date Brute CSV"])
+
+    # --- TAB 1: Graficul 3D ---
+    with tab1:
+        st.header(f"Vizualizare Sistem Gravita?ional la Pasul {pas_selectat}")
+        
+        cale_fisier_curent = os.path.join(DATA_DIR, f"snap_{pas_selectat:05d}.xyz")
+        df_particule = citeste_xyz(cale_fisier_curent)
+        
+        if not df_particule.empty:
+            # Creare grafic 3D cu Plotly Express
+            fig = px.scatter_3d(
+                df_particule, x='X', y='Y', z='Z',
+                hover_name='ID_Corp',
+                color_discrete_sequence=['#00e5ff'],
+                title=f"Pozi?ia spa?ialã a celor N={len(df_particule)} corpuri"
+            )
+            
+            # Design stil "dark space" pentru un aspect profesional (fundal complet negru)
+            fig.update_layout(
+                scene=dict(
+                    xaxis=dict(backgroundcolor="black", gridcolor="#222222", showbackground=True),
+                    yaxis=dict(backgroundcolor="black", gridcolor="#222222", showbackground=True),
+                    zaxis=dict(backgroundcolor="black", gridcolor="#222222", showbackground=True)
+                ),
+                paper_bgcolor="black",
+                font_color="white",
+                margin=dict(l=0, r=0, b=0, t=40)
+            )
+            
+            # Afi?eazã graficul în paginã ocupând tot spa?iul disponibil
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error(f"Nu s-au putut citi datele din fi?ierul `snap_{pas_selectat:05d}.xyz`.")
+
+    # --- TAB 2: Graficul de Energie ---
+    with tab2:
+        st.header("Analiza Devia?iei de Energie")
+        st.write("Verificarea criteriului de validare numericã (Drift Relativ).")
+        
+        # Cãutãm automat orice fi?ier text de energie în folderul data (ex: mpi_1k.txt, energy_seq.txt)
+        fisiere_txt = glob.glob(os.path.join(DATA_DIR, '*.txt'))
+        
+        if fisiere_txt:
+            # Alegem primul fi?ier text gãsit pentru analizã
+            cale_en = fisiere_txt[0]
+            st.info(f"Se analizeazã evolu?ia stãrii din fi?ierul text: `{os.path.basename(cale_en)}`")
+            
+            df_energie = citeste_energie(cale_en)
+            
+            if not df_energie.empty:
+                # Calculul driftului relativ (E(t) - E(0)) / E(0)
+                e0 = df_energie['Energie_Totala'].iloc[0]
+                df_energie['Drift_Relativ'] = ((df_energie['Energie_Totala'] - e0) / e0).abs()
+                
+                # Desenare grafic de evolu?ie a energiei
+                fig_linie = px.line(
+                    df_energie, x='Pas_Timp', y='Drift_Relativ',
+                    labels={'Pas_Timp': 'Pas de timp', 'Drift_Relativ': 'Drift Relativ |?E/E0|'},
+                    title="Deriva Relativã a Energiei pe parcursul rulãrii"
+                )
+                
+                # Linie de ghidaj ro?ie pentru pragul critic de 10^-4 definit în documenta?ia ta
+                fig_linie.add_hline(y=0.0001, line_dash="dash", line_color="red", annotation_text="Prag Critic Validare (10^-4)")
+                st.plotly_chart(fig_linie, use_container_width=True)
+                
+                # Verificare automatã a condi?iei de master
+                max_drift = df_energie['Drift_Relativ'].max()
+                if max_drift < 0.0001:
+                    st.success(f"? Rulare Validatã! Toate punctele se aflã sub limita impusã de 10^-4 (Max înregistrat: {max_drift:.6e}).")
+                else:
+                    st.warning(f"?? Devia?ie detectatã! Driftul maxim ({max_drift:.6e}) a depã?it pragul standard de toleran?ã numericã.")
+            else:
+                st.warning("Fi?ierul text a fost gãsit, dar nu con?ine formatul corect de parsare (liniile trebuie sã aibã structura: 'Pas X Energie = Y').")
+        else:
+            st.info("Pute?i copia fi?ierul `mpi_1k.txt` sau `energy_seq.txt` din PuTTY în folderul local `data/` pentru a genera automat graficele de stabilitate a energiei.")
+
+    # --- TAB 3: Date Brute ---
+    with tab3:
+        st.header("Tabel Structurã Fi?ier text (XYZ)")
+        if not df_particule.empty:
+            st.write(f"Coordonatele carteziene extrase în timp real din `snap_{pas_selectat:05d}.xyz`:")
+            st.dataframe(df_particule, use_container_width=True) 
